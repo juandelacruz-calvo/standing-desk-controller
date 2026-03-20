@@ -1,7 +1,7 @@
 [project]
 name = "standing-desktop-controller"
 version = "0.1.0"
-description = "Add your description here"
+description = "DIY standing desk height controller using Arduino Nano, HC-SR04 ultrasonic sensor, and programmable memory presets"
 requires-python = ">=3.14"
 dependencies = [
     "platformio>=6.1.19",
