@@ -24,7 +24,7 @@ btn_d = 12.0;
 btn_slit_w = 1.0;
 btn_hinge_angle = 40;
 btn_spacing = 18.0;
-btn_count = 4;
+btn_count = 5;
 
 /* [Rail] */
 rail_h = 1.5;
@@ -139,7 +139,7 @@ module enclosure() {
         }
 
         // --- Button labels embossed on angled face ---
-        labels = ["M1", "M2", "\u25B2", "\u25BC"];
+        labels = ["M1", "M2", "M3", "\u25B2", "\u25BC"];
         label_depth = 0.6;
         for (i = [0 : btn_count - 1]) {
             bx = (outer_l - (btn_count - 1) * btn_spacing) / 2 + i * btn_spacing;

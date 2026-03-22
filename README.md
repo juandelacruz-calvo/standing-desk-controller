@@ -5,7 +5,7 @@ A DIY standing desk height controller built with an Arduino Nano and an HC-SR04 
 ## Features
 
 - **Closed-loop height control** using an HC-SR04 ultrasonic distance sensor mounted under the desk, pointing at the floor
-- **2 memory presets** — short press to recall, long press to save current height
+- **3 memory presets** — short press to recall, long press to save current height
 - **Manual up/down** — hold to move, release to stop
 - **EEPROM persistence** — saved positions survive power cycles
 - **Safety** — 30-second movement timeout, any button press cancels an auto-move
@@ -20,7 +20,7 @@ A DIY standing desk height controller built with an Arduino Nano and an HC-SR04 
 |---|---|---|
 | Arduino Nano (ATmega328P) | 1 | CH340 USB clone works fine |
 | HC-SR04 ultrasonic sensor | 1 | Must be powered from 5V |
-| Tactile push buttons | 4 | Connected between pin and GND |
+| Tactile push buttons | 5 | Connected between pin and GND |
 | Existing desk controller | 1 | 3-pin: GND, UP, DOWN (active LOW) |
 
 ### Wiring
@@ -45,6 +45,7 @@ D2  ───────────────── UP button
 D3  ───────────────── DOWN button
 D4  ───────────────── MEM1 button
 D5  ───────────────── MEM2 button
+D10 ───────────────── MEM3 button
 ```
 
 Buttons use the internal pull-up resistors (`INPUT_PULLUP`), so each button simply connects its pin to GND when pressed. No external resistors needed.
@@ -106,6 +107,7 @@ Most CH340-based Nano clones use the **old bootloader** at 57600 baud. This is a
 | DOWN | Move desk down (hold) | — |
 | MEM1 | Move to saved position 1 | Save current height as position 1 |
 | MEM2 | Move to saved position 2 | Save current height as position 2 |
+| MEM3 | Move to saved position 3 | Save current height as position 3 |
 
 Pressing any button during an auto-move cancels it immediately.
 
@@ -140,12 +142,13 @@ On boot, the controller prints a diagnostic summary:
 [Pins]
   Sensor:  TRIG=D6 ECHO=D7
   Motor:   UP=D8 DN=D9
-  Buttons: UP=D2 DN=D3 M1=D4 M2=D5
+  Buttons: UP=D2 DN=D3 M1=D4 M2=D5 M3=D10
 [Sensor test]
   HC-SR04: OK  Height=72.3 cm
 [Memory]
   MEM1: 74.0 cm
   MEM2: 110.5 cm
+  MEM3: 90.0 cm
 [Config]
   Tolerance: 0.5 cm
   Timeout:   30 s

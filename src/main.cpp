@@ -14,6 +14,7 @@ constexpr uint8_t PIN_BTN_UP    = 2;
 constexpr uint8_t PIN_BTN_DN    = 3;
 constexpr uint8_t PIN_BTN_MEM1  = 4;
 constexpr uint8_t PIN_BTN_MEM2  = 5;
+constexpr uint8_t PIN_BTN_MEM3  = 10;
 
 // --- Sensor config ---
 constexpr unsigned int MAX_DISTANCE_CM = 200;
@@ -26,6 +27,7 @@ constexpr unsigned long SENSOR_INTERVAL_MS = 100;
 // --- EEPROM addresses (each float = 4 bytes) ---
 constexpr int EEPROM_ADDR_MEM1 = 0;
 constexpr int EEPROM_ADDR_MEM2 = 4;
+constexpr int EEPROM_ADDR_MEM3 = 8;
 
 // --- State machine ---
 enum State : uint8_t {
@@ -42,12 +44,14 @@ AceButton btnUp(PIN_BTN_UP);
 AceButton btnDown(PIN_BTN_DN);
 AceButton btnMem1(PIN_BTN_MEM1);
 AceButton btnMem2(PIN_BTN_MEM2);
+AceButton btnMem3(PIN_BTN_MEM3);
 
 State currentState = STATE_IDLE;
 float currentHeight = 0.0f;
 float targetHeight  = 0.0f;
 float mem1Height    = NAN;
 float mem2Height    = NAN;
+float mem3Height    = NAN;
 unsigned long moveStartTime   = 0;
 unsigned long lastSensorRead  = 0;
 
@@ -93,16 +97,20 @@ float readHeight() {
 void loadMemory() {
   EEPROM.get(EEPROM_ADDR_MEM1, mem1Height);
   EEPROM.get(EEPROM_ADDR_MEM2, mem2Height);
+  EEPROM.get(EEPROM_ADDR_MEM3, mem3Height);
   if (isnan(mem1Height) || mem1Height < 1.0f || mem1Height > (float)MAX_DISTANCE_CM)
     mem1Height = NAN;
   if (isnan(mem2Height) || mem2Height < 1.0f || mem2Height > (float)MAX_DISTANCE_CM)
     mem2Height = NAN;
+  if (isnan(mem3Height) || mem3Height < 1.0f || mem3Height > (float)MAX_DISTANCE_CM)
+    mem3Height = NAN;
 }
 
 void saveMemory(int addr, float height) {
   EEPROM.put(addr, height);
   Serial.print(F("Saved "));
-  Serial.print(addr == EEPROM_ADDR_MEM1 ? F("MEM1") : F("MEM2"));
+  Serial.print(addr == EEPROM_ADDR_MEM1 ? F("MEM1") :
+               addr == EEPROM_ADDR_MEM2 ? F("MEM2") : F("MEM3"));
   Serial.print(F(" = "));
   Serial.print(height, 1);
   Serial.println(F(" cm"));
@@ -185,7 +193,7 @@ void handleButtonEvent(AceButton* button, uint8_t eventType, uint8_t /* buttonSt
     return;
   }
 
-  // --- MEM1 / MEM2: click = recall, long press = save ---
+  // --- MEM1 / MEM2 / MEM3: click = recall, long press = save ---
   if (pin == PIN_BTN_MEM1) {
     if (eventType == AceButton::kEventClicked) {
       if (currentState == STATE_MOVING_TO_TARGET) cancelMove();
@@ -217,6 +225,22 @@ void handleButtonEvent(AceButton* button, uint8_t eventType, uint8_t /* buttonSt
     }
     return;
   }
+
+  if (pin == PIN_BTN_MEM3) {
+    if (eventType == AceButton::kEventClicked) {
+      if (currentState == STATE_MOVING_TO_TARGET) cancelMove();
+      if (!isnan(mem3Height)) {
+        startMoveToTarget(mem3Height);
+      } else {
+        Serial.println(F("MEM3 not set"));
+      }
+    } else if (eventType == AceButton::kEventLongPressed) {
+      currentHeight = readHeight();
+      mem3Height = currentHeight;
+      saveMemory(EEPROM_ADDR_MEM3, mem3Height);
+    }
+    return;
+  }
 }
 
 // ---------- Setup ----------
@@ -232,6 +256,7 @@ void setup() {
   pinMode(PIN_BTN_DN,   INPUT_PULLUP);
   pinMode(PIN_BTN_MEM1, INPUT_PULLUP);
   pinMode(PIN_BTN_MEM2, INPUT_PULLUP);
+  pinMode(PIN_BTN_MEM3, INPUT_PULLUP);
 
   ButtonConfig* cfg = ButtonConfig::getSystemButtonConfig();
   cfg->setEventHandler(handleButtonEvent);
@@ -254,7 +279,8 @@ void setup() {
   Serial.print(F("  Buttons: UP=D"));   Serial.print(PIN_BTN_UP);
   Serial.print(F(" DN=D"));             Serial.print(PIN_BTN_DN);
   Serial.print(F(" M1=D"));             Serial.print(PIN_BTN_MEM1);
-  Serial.print(F(" M2=D"));             Serial.println(PIN_BTN_MEM2);
+  Serial.print(F(" M2=D"));             Serial.print(PIN_BTN_MEM2);
+  Serial.print(F(" M3=D"));             Serial.println(PIN_BTN_MEM3);
 
   Serial.println(F("[Sensor test]"));
   currentHeight = readHeight();
@@ -281,6 +307,13 @@ void setup() {
   } else {
     Serial.println(F("  MEM2: not set"));
   }
+  if (!isnan(mem3Height)) {
+    Serial.print(F("  MEM3: "));
+    Serial.print(mem3Height, 1);
+    Serial.println(F(" cm"));
+  } else {
+    Serial.println(F("  MEM3: not set"));
+  }
 
   Serial.println(F("[Config]"));
   Serial.print(F("  Tolerance: ")); Serial.print(HEIGHT_TOLERANCE_CM, 1); Serial.println(F(" cm"));
@@ -298,6 +331,7 @@ void loop() {
   btnDown.check();
   btnMem1.check();
   btnMem2.check();
+  btnMem3.check();
 
   if (currentState == STATE_MOVING_TO_TARGET) {
     updateMoveToTarget();
