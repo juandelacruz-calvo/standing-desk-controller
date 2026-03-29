@@ -8,8 +8,8 @@ using namespace ace_button;
 // --- Pin assignments ---
 constexpr uint8_t PIN_TRIG      = 6;
 constexpr uint8_t PIN_ECHO      = 7;
-constexpr uint8_t PIN_MOTOR_UP  = 8;   // active LOW
-constexpr uint8_t PIN_MOTOR_DN  = 9;   // active LOW
+constexpr uint8_t PIN_MOTOR_UP  = 8;   // open-drain: LOW = move, float = stop
+constexpr uint8_t PIN_MOTOR_DN  = 9;   // open-drain: LOW = move, float = stop
 constexpr uint8_t PIN_BTN_UP    = 2;
 constexpr uint8_t PIN_BTN_DN    = 3;
 constexpr uint8_t PIN_BTN_MEM1  = 4;
@@ -40,8 +40,9 @@ enum State : uint8_t {
 // --- Globals ---
 NewPing sonar(PIN_TRIG, PIN_ECHO, MAX_DISTANCE_CM);
 
-AceButton btnUp(PIN_BTN_UP);
-AceButton btnDown(PIN_BTN_DN);
+ButtonConfig manualBtnConfig;
+AceButton btnUp(&manualBtnConfig, PIN_BTN_UP);
+AceButton btnDown(&manualBtnConfig, PIN_BTN_DN);
 AceButton btnMem1(PIN_BTN_MEM1);
 AceButton btnMem2(PIN_BTN_MEM2);
 AceButton btnMem3(PIN_BTN_MEM3);
@@ -70,17 +71,19 @@ void cancelMove();
 // ---------- Motor control ----------
 
 void motorStop() {
-  digitalWrite(PIN_MOTOR_UP, HIGH);
-  digitalWrite(PIN_MOTOR_DN, HIGH);
+  pinMode(PIN_MOTOR_UP, INPUT);
+  pinMode(PIN_MOTOR_DN, INPUT);
 }
 
 void motorUp() {
-  digitalWrite(PIN_MOTOR_DN, HIGH);
+  pinMode(PIN_MOTOR_DN, INPUT);
+  pinMode(PIN_MOTOR_UP, OUTPUT);
   digitalWrite(PIN_MOTOR_UP, LOW);
 }
 
 void motorDown() {
-  digitalWrite(PIN_MOTOR_UP, HIGH);
+  pinMode(PIN_MOTOR_UP, INPUT);
+  pinMode(PIN_MOTOR_DN, OUTPUT);
   digitalWrite(PIN_MOTOR_DN, LOW);
 }
 
@@ -171,10 +174,12 @@ void handleButtonEvent(AceButton* button, uint8_t eventType, uint8_t /* buttonSt
   // --- UP / DOWN: manual hold-to-move ---
   if (pin == PIN_BTN_UP) {
     if (eventType == AceButton::kEventPressed) {
+      Serial.println(F("BTN UP pressed"));
       if (currentState == STATE_MOVING_TO_TARGET) cancelMove();
       motorUp();
       currentState = STATE_MANUAL_UP;
     } else if (eventType == AceButton::kEventReleased) {
+      Serial.println(F("BTN UP released"));
       motorStop();
       currentState = STATE_IDLE;
     }
@@ -183,10 +188,12 @@ void handleButtonEvent(AceButton* button, uint8_t eventType, uint8_t /* buttonSt
 
   if (pin == PIN_BTN_DN) {
     if (eventType == AceButton::kEventPressed) {
+      Serial.println(F("BTN DN pressed"));
       if (currentState == STATE_MOVING_TO_TARGET) cancelMove();
       motorDown();
       currentState = STATE_MANUAL_DOWN;
     } else if (eventType == AceButton::kEventReleased) {
+      Serial.println(F("BTN DN released"));
       motorStop();
       currentState = STATE_IDLE;
     }
@@ -196,6 +203,7 @@ void handleButtonEvent(AceButton* button, uint8_t eventType, uint8_t /* buttonSt
   // --- MEM1 / MEM2 / MEM3: click = recall, long press = save ---
   if (pin == PIN_BTN_MEM1) {
     if (eventType == AceButton::kEventClicked) {
+      Serial.println(F("BTN MEM1 clicked"));
       if (currentState == STATE_MOVING_TO_TARGET) cancelMove();
       if (!isnan(mem1Height)) {
         startMoveToTarget(mem1Height);
@@ -203,6 +211,7 @@ void handleButtonEvent(AceButton* button, uint8_t eventType, uint8_t /* buttonSt
         Serial.println(F("MEM1 not set"));
       }
     } else if (eventType == AceButton::kEventLongPressed) {
+      Serial.println(F("BTN MEM1 long press"));
       currentHeight = readHeight();
       mem1Height = currentHeight;
       saveMemory(EEPROM_ADDR_MEM1, mem1Height);
@@ -212,6 +221,7 @@ void handleButtonEvent(AceButton* button, uint8_t eventType, uint8_t /* buttonSt
 
   if (pin == PIN_BTN_MEM2) {
     if (eventType == AceButton::kEventClicked) {
+      Serial.println(F("BTN MEM2 clicked"));
       if (currentState == STATE_MOVING_TO_TARGET) cancelMove();
       if (!isnan(mem2Height)) {
         startMoveToTarget(mem2Height);
@@ -219,6 +229,7 @@ void handleButtonEvent(AceButton* button, uint8_t eventType, uint8_t /* buttonSt
         Serial.println(F("MEM2 not set"));
       }
     } else if (eventType == AceButton::kEventLongPressed) {
+      Serial.println(F("BTN MEM2 long press"));
       currentHeight = readHeight();
       mem2Height = currentHeight;
       saveMemory(EEPROM_ADDR_MEM2, mem2Height);
@@ -228,6 +239,7 @@ void handleButtonEvent(AceButton* button, uint8_t eventType, uint8_t /* buttonSt
 
   if (pin == PIN_BTN_MEM3) {
     if (eventType == AceButton::kEventClicked) {
+      Serial.println(F("BTN MEM3 clicked"));
       if (currentState == STATE_MOVING_TO_TARGET) cancelMove();
       if (!isnan(mem3Height)) {
         startMoveToTarget(mem3Height);
@@ -235,6 +247,7 @@ void handleButtonEvent(AceButton* button, uint8_t eventType, uint8_t /* buttonSt
         Serial.println(F("MEM3 not set"));
       }
     } else if (eventType == AceButton::kEventLongPressed) {
+      Serial.println(F("BTN MEM3 long press"));
       currentHeight = readHeight();
       mem3Height = currentHeight;
       saveMemory(EEPROM_ADDR_MEM3, mem3Height);
@@ -248,8 +261,6 @@ void handleButtonEvent(AceButton* button, uint8_t eventType, uint8_t /* buttonSt
 void setup() {
   Serial.begin(9600);
 
-  pinMode(PIN_MOTOR_UP, OUTPUT);
-  pinMode(PIN_MOTOR_DN, OUTPUT);
   motorStop();
 
   pinMode(PIN_BTN_UP,   INPUT_PULLUP);
@@ -257,6 +268,8 @@ void setup() {
   pinMode(PIN_BTN_MEM1, INPUT_PULLUP);
   pinMode(PIN_BTN_MEM2, INPUT_PULLUP);
   pinMode(PIN_BTN_MEM3, INPUT_PULLUP);
+
+  manualBtnConfig.setEventHandler(handleButtonEvent);
 
   ButtonConfig* cfg = ButtonConfig::getSystemButtonConfig();
   cfg->setEventHandler(handleButtonEvent);
