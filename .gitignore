@@ -12,3 +12,6 @@ wheels/
 
 # PlatformIO
 .pio/
+
+# Local WiFi/MQTT credentials (copy from src/secrets.h.example)
+src/secrets.h
