@@ -36,10 +36,10 @@ using namespace ace_button;
 constexpr uint8_t PIN_TRIG      = D5;   // GPIO14 — HC-SR04 TRIG
 constexpr uint8_t PIN_ECHO     = D6;   // GPIO12 — HC-SR04 ECHO
 constexpr uint8_t PIN_MOTOR_UP  = D7;   // GPIO13 — open-drain: LOW = move, float = stop
-constexpr uint8_t PIN_MOTOR_DN  = D1;   // GPIO5
+constexpr uint8_t PIN_MOTOR_DN  = D8;   // GPIO15
 constexpr uint8_t PIN_BTN_UP    = D2;   // GPIO4
 constexpr uint8_t PIN_BTN_DN    = D4;   // GPIO2 (onboard LED on some boards)
-constexpr uint8_t PIN_BTN_MEM1  = D8;   // GPIO15
+constexpr uint8_t PIN_BTN_MEM1  = D1;   // GPIO5
 constexpr uint8_t PIN_BTN_MEM2  = D3;   // GPIO0 — boot strap; do not hold low at power-on
 constexpr uint8_t PIN_BTN_MEM3  = D0;   // GPIO16
 
@@ -58,9 +58,11 @@ constexpr int EEPROM_ADDR_MQTT_PREFIX = 134;
 constexpr unsigned int MAX_DISTANCE_CM = 200;
 
 // --- Closed-loop config ---
-constexpr float HEIGHT_TOLERANCE_CM  = 0.5f;
+constexpr float HEIGHT_TOLERANCE_CM  = 1.5f;
 constexpr unsigned long MOVE_TIMEOUT_MS = 30000;
-constexpr unsigned long SENSOR_INTERVAL_MS = 100;
+constexpr unsigned long SENSOR_INTERVAL_MS = 200;
+constexpr unsigned long IDLE_LOG_INTERVAL_MS = 500;
+constexpr float HEIGHT_SMOOTHING_ALPHA = 0.35f;
 
 // --- EEPROM addresses (each float = 4 bytes) ---
 constexpr int EEPROM_ADDR_MEM1 = 0;
@@ -159,7 +161,12 @@ void motorDown() {
 float readHeight() {
   unsigned long us = sonar.ping_median(5);
   if (us == 0) return currentHeight;
-  return (float)us / US_ROUNDTRIP_CM;
+  float measuredCm = (float)us / US_ROUNDTRIP_CM;
+  if (measuredCm < 1.0f || measuredCm > (float)MAX_DISTANCE_CM) return currentHeight;
+
+  bool isMoving = (currentState != STATE_IDLE);
+  if (isMoving || currentHeight <= 0.0f) return measuredCm;
+  return currentHeight + HEIGHT_SMOOTHING_ALPHA * (measuredCm - currentHeight);
 }
 
 // ---------- EEPROM ----------
@@ -711,8 +718,8 @@ void setup() {
 
   Serial.println(F("[Pins] Wemos D1 Mini"));
   Serial.println(F("  Sensor:  TRIG=D5(GPIO14) ECHO=D6(GPIO12)"));
-  Serial.println(F("  Motor:   UP=D7(GPIO13) DN=D1(GPIO5)"));
-  Serial.println(F("  Buttons: UP=D2(GPIO4) DN=D4(GPIO2) M1=D8(GPIO15) M2=D3(GPIO0) M3=D0(GPIO16)"));
+  Serial.println(F("  Motor:   UP=D7(GPIO13) DN=D8(GPIO15)"));
+  Serial.println(F("  Buttons: UP=D2(GPIO4) DN=D4(GPIO2) M1=D1(GPIO5) M2=D3(GPIO0) M3=D0(GPIO16)"));
 
   Serial.println(F("[Sensor test]"));
   currentHeight = readHeight();
@@ -783,19 +790,19 @@ void loop() {
 
   if (currentState == STATE_MOVING_TO_TARGET) {
     updateMoveToTarget();
+  } else if (millis() - lastSensorRead >= SENSOR_INTERVAL_MS) {
+    lastSensorRead = millis();
+    currentHeight = readHeight();
+    if (currentState != STATE_IDLE) publishMqttState(false);
   }
 
   static unsigned long lastDebug = 0;
-  if (currentState == STATE_IDLE && millis() - lastDebug > 2000) {
+  if (currentState == STATE_IDLE && millis() - lastDebug > IDLE_LOG_INTERVAL_MS) {
     lastDebug = millis();
-    unsigned long us = sonar.ping_median(5);
-    float cm = (us == 0) ? 0.0f : (float)us / US_ROUNDTRIP_CM;
-    currentHeight = (us == 0) ? currentHeight : cm;
+    currentHeight = readHeight();
     Serial.print(F("H: "));
-    Serial.print(cm, 1);
-    Serial.print(F(" cm  raw="));
-    Serial.print(us);
-    Serial.println(F(" us"));
+    Serial.print(currentHeight, 1);
+    Serial.println(F(" cm"));
     publishMqttState(false);
   }
 
