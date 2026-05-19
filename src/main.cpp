@@ -1,10 +1,11 @@
 #include <Arduino.h>
 #include <EEPROM.h>
-#include <cmath>
-#include <cstdlib>
-#include <cstring>
-#include <NewPing.h>
+#include <math.h>
+#include <stdlib.h>
+#include <string.h>
+#include <HCSR04.h>
 #include <AceButton.h>
+#include "pins.h"
 
 #if __has_include("secrets.h")
 #include "secrets.h"
@@ -25,23 +26,13 @@
 #define MQTT_TOPIC_PREFIX "standing-desk"
 #endif
 
+#ifndef NO_WIFI
 #include <ESP8266WiFi.h>
 #include <WiFiManager.h>
 #include <PubSubClient.h>
+#endif
 
 using namespace ace_button;
-
-// --- Wemos D1 Mini (ESP8266) pin assignments ---
-// D0..D8 map to GPIO16,5,4,0,2,14,12,13,15 — avoid holding D3/D8 low at reset.
-constexpr uint8_t PIN_TRIG      = D5;   // GPIO14 — HC-SR04 TRIG
-constexpr uint8_t PIN_ECHO     = D6;   // GPIO12 — HC-SR04 ECHO
-constexpr uint8_t PIN_MOTOR_UP  = D7;   // GPIO13 — open-drain: LOW = move, float = stop
-constexpr uint8_t PIN_MOTOR_DN  = D8;   // GPIO15
-constexpr uint8_t PIN_BTN_UP    = D2;   // GPIO4
-constexpr uint8_t PIN_BTN_DN    = D4;   // GPIO2 (onboard LED on some boards)
-constexpr uint8_t PIN_BTN_MEM1  = D1;   // GPIO5
-constexpr uint8_t PIN_BTN_MEM2  = D3;   // GPIO0 — boot strap; do not hold low at power-on
-constexpr uint8_t PIN_BTN_MEM3  = D0;   // GPIO16
 
 constexpr size_t EEPROM_SIZE = 512;
 
@@ -55,13 +46,13 @@ constexpr int EEPROM_ADDR_MQTT_PASS = 102;
 constexpr int EEPROM_ADDR_MQTT_PREFIX = 134;
 
 // --- Sensor config ---
-constexpr unsigned int MAX_DISTANCE_CM = 200;
+constexpr unsigned int MAX_DISTANCE_CM = 400;
 
 // --- Closed-loop config ---
 constexpr float HEIGHT_TOLERANCE_CM  = 1.5f;
 constexpr unsigned long MOVE_TIMEOUT_MS = 30000;
-constexpr unsigned long SENSOR_INTERVAL_MS = 200;
-constexpr unsigned long IDLE_LOG_INTERVAL_MS = 500;
+constexpr unsigned long SENSOR_INTERVAL_MS = 750;
+constexpr unsigned long IDLE_LOG_INTERVAL_MS = 750;
 constexpr float HEIGHT_SMOOTHING_ALPHA = 0.35f;
 
 // --- EEPROM addresses (each float = 4 bytes) ---
@@ -78,7 +69,7 @@ enum State : uint8_t {
 };
 
 // --- Globals ---
-NewPing sonar(PIN_TRIG, PIN_ECHO, MAX_DISTANCE_CM);
+HCSR04 sonar(PIN_TRIG, PIN_ECHO, 20.0, (float)MAX_DISTANCE_CM);
 
 ButtonConfig manualBtnConfig;
 AceButton btnUp(&manualBtnConfig, PIN_BTN_UP);
@@ -96,6 +87,7 @@ float mem3Height    = NAN;
 unsigned long moveStartTime   = 0;
 unsigned long lastSensorRead  = 0;
 
+#ifndef NO_WIFI
 WiFiClient wifiClient;
 PubSubClient mqttClient(wifiClient);
 
@@ -111,6 +103,7 @@ char wifiMqttPort[8] = "1883";
 char wifiMqttUser[32] = "";
 char wifiMqttPass[32] = "";
 char wifiMqttPrefix[40] = "standing-desk";
+#endif
 
 // --- Forward declarations ---
 void handleButtonEvent(AceButton* button, uint8_t eventType, uint8_t buttonState);
@@ -125,6 +118,7 @@ void updateMoveToTarget();
 void cancelMove();
 
 const char* stateToString();
+#ifndef NO_WIFI
 void publishMqttState(bool force = false);
 void handleMqttCommand(char* cmd);
 void mqttCallback(char* topic, byte* payload, unsigned int length);
@@ -136,33 +130,36 @@ void wifiSetupPortal();
 void wifiEnsureConnected();
 void mqttEnsureConnected();
 void publishHomeAssistantDiscovery();
+#endif
 
 // ---------- Motor control ----------
 
 void motorStop() {
-  pinMode(PIN_MOTOR_UP, INPUT);
-  pinMode(PIN_MOTOR_DN, INPUT);
+  // Drive both pins HIGH to stop motors (active-low logic).
+  // We use OUTPUT mode to overcome any internal pull-downs in the motor driver.
+  pinMode(PIN_MOTOR_UP, OUTPUT);
+  digitalWrite(PIN_MOTOR_UP, HIGH);
+  pinMode(PIN_MOTOR_DN, OUTPUT);
+  digitalWrite(PIN_MOTOR_DN, HIGH);
 }
 
 void motorUp() {
-  pinMode(PIN_MOTOR_DN, INPUT);
-  pinMode(PIN_MOTOR_UP, OUTPUT);
+  // Stop both first for safety, then drive UP low
+  motorStop();
   digitalWrite(PIN_MOTOR_UP, LOW);
 }
 
 void motorDown() {
-  pinMode(PIN_MOTOR_UP, INPUT);
-  pinMode(PIN_MOTOR_DN, OUTPUT);
+  // Stop both first for safety, then drive DN low
+  motorStop();
   digitalWrite(PIN_MOTOR_DN, LOW);
 }
 
 // ---------- Sensor ----------
 
 float readHeight() {
-  unsigned long us = sonar.ping_median(5);
-  if (us == 0) return currentHeight;
-  float measuredCm = (float)us / US_ROUNDTRIP_CM;
-  if (measuredCm < 1.0f || measuredCm > (float)MAX_DISTANCE_CM) return currentHeight;
+  float measuredCm = sonar.getMedianFilterDistance();
+  if (measuredCm <= 0.0f || measuredCm > (float)MAX_DISTANCE_CM) return currentHeight;
 
   bool isMoving = (currentState != STATE_IDLE);
   if (isMoving || currentHeight <= 0.0f) return measuredCm;
@@ -194,9 +191,12 @@ void saveMemory(int addr, float height) {
   Serial.print(F(" = "));
   Serial.print(height, 1);
   Serial.println(F(" cm"));
+#ifndef NO_WIFI
   publishMqttState(true);
+#endif
 }
 
+#ifndef NO_WIFI
 static void readStringFromEeprom(int addr, char* buf, size_t maxLen) {
   for (size_t i = 0; i < maxLen - 1; i++) {
     uint8_t c = EEPROM.read(addr + (int)i);
@@ -274,6 +274,7 @@ uint16_t mqttPortNumber() {
   if (p > 0 && p < 65536) return (uint16_t)p;
   return 1883;
 }
+#endif
 
 // ---------- Closed-loop movement ----------
 
@@ -284,14 +285,18 @@ void startMoveToTarget(float target) {
   Serial.print(F("Moving to "));
   Serial.print(targetHeight, 1);
   Serial.println(F(" cm"));
+#ifndef NO_WIFI
   publishMqttState(true);
+#endif
 }
 
 void cancelMove() {
   motorStop();
   currentState = STATE_IDLE;
   Serial.println(F("Move cancelled"));
+#ifndef NO_WIFI
   publishMqttState(true);
+#endif
 }
 
 void updateMoveToTarget() {
@@ -299,7 +304,9 @@ void updateMoveToTarget() {
     motorStop();
     currentState = STATE_IDLE;
     Serial.println(F("Move timeout"));
+#ifndef NO_WIFI
     publishMqttState(true);
+#endif
     return;
   }
 
@@ -315,7 +322,9 @@ void updateMoveToTarget() {
     Serial.print(F("Target reached: "));
     Serial.print(currentHeight, 1);
     Serial.println(F(" cm"));
+#ifndef NO_WIFI
     publishMqttState(true);
+#endif
     return;
   }
 
@@ -324,7 +333,9 @@ void updateMoveToTarget() {
   } else {
     motorDown();
   }
+#ifndef NO_WIFI
   publishMqttState(false);
+#endif
 }
 
 // ---------- Button handler ----------
@@ -344,7 +355,9 @@ void handleButtonEvent(AceButton* button, uint8_t eventType, uint8_t /* buttonSt
       motorStop();
       currentState = STATE_IDLE;
     }
+#ifndef NO_WIFI
     publishMqttState(true);
+#endif
     return;
   }
 
@@ -359,7 +372,9 @@ void handleButtonEvent(AceButton* button, uint8_t eventType, uint8_t /* buttonSt
       motorStop();
       currentState = STATE_IDLE;
     }
+#ifndef NO_WIFI
     publishMqttState(true);
+#endif
     return;
   }
 
@@ -431,9 +446,11 @@ const char* stateToString() {
   }
 }
 
+#ifndef NO_WIFI
 void publishMqttState(bool force) {
   if (wifiMqttServer[0] == '\0') return;
   if (WiFi.status() != WL_CONNECTED || !mqttClient.connected()) return;
+// ... (rest of the function)
   unsigned long now = millis();
   if (!force && (now - lastMqttPublishMs) < 400) return;
   lastMqttPublishMs = now;
@@ -682,11 +699,13 @@ void publishHomeAssistantDiscovery() {
     mqttClient.publish(mqttTopicBuf, mqttPayloadBuf, true);
   }
 }
+#endif
 
 // ---------- Setup ----------
 
 void setup() {
   Serial.begin(115200);
+  sonar.begin();
 #if defined(ESP8266)
   EEPROM.begin(EEPROM_SIZE);
 #endif
@@ -709,17 +728,21 @@ void setup() {
   cfg->setFeature(ButtonConfig::kFeatureSuppressAfterClick);
 
   loadMemory();
+#ifndef NO_WIFI
   loadMqttFromEeprom();
   wifiSetupPortal();
+#endif
 
   Serial.println(F("==========================="));
   Serial.println(F(" Standing Desk Controller"));
   Serial.println(F("==========================="));
 
-  Serial.println(F("[Pins] Wemos D1 Mini"));
-  Serial.println(F("  Sensor:  TRIG=D5(GPIO14) ECHO=D6(GPIO12)"));
-  Serial.println(F("  Motor:   UP=D7(GPIO13) DN=D8(GPIO15)"));
-  Serial.println(F("  Buttons: UP=D2(GPIO4) DN=D4(GPIO2) M1=D1(GPIO5) M2=D3(GPIO0) M3=D0(GPIO16)"));
+  Serial.println(F("[Pins] Unified Mapping (D1 Mini / Nano)"));
+  Serial.print(F("  Sensor:  TRIG=")); Serial.print(PIN_TRIG); Serial.print(F(" ECHO=")); Serial.println(PIN_ECHO);
+  Serial.print(F("  Motor:   UP=")); Serial.print(PIN_MOTOR_UP); Serial.print(F(" DN=")); Serial.println(PIN_MOTOR_DN);
+  Serial.print(F("  Buttons: UP=")); Serial.print(PIN_BTN_UP); Serial.print(F(" DN=")); Serial.print(PIN_BTN_DN);
+  Serial.print(F(" M1=")); Serial.print(PIN_BTN_MEM1); Serial.print(F(" M2=")); Serial.print(PIN_BTN_MEM2);
+  Serial.print(F(" M3=")); Serial.println(PIN_BTN_MEM3);
 
   Serial.println(F("[Sensor test]"));
   currentHeight = readHeight();
@@ -759,6 +782,7 @@ void setup() {
   Serial.print(F("  Timeout:   ")); Serial.print(MOVE_TIMEOUT_MS / 1000); Serial.println(F(" s"));
   Serial.print(F("  Max dist:  ")); Serial.print(MAX_DISTANCE_CM);        Serial.println(F(" cm"));
 
+#ifndef NO_WIFI
   if (wifiMqttServer[0] != '\0') {
     Serial.println(F("[MQTT]"));
     Serial.print(F("  Broker:  ")); Serial.print(wifiMqttServer);
@@ -770,6 +794,9 @@ void setup() {
   } else {
     Serial.println(F("[MQTT] disabled (empty broker in WiFiManager portal)"));
   }
+#else
+  Serial.println(F("[MQTT] disabled (Nano build)"));
+#endif
 
   Serial.println(F("==========================="));
   Serial.println(F("Ready."));
@@ -778,9 +805,11 @@ void setup() {
 // ---------- Loop ----------
 
 void loop() {
+#ifndef NO_WIFI
   wifiEnsureConnected();
   mqttEnsureConnected();
   mqttClient.loop();
+#endif
 
   btnUp.check();
   btnDown.check();
@@ -793,7 +822,9 @@ void loop() {
   } else if (millis() - lastSensorRead >= SENSOR_INTERVAL_MS) {
     lastSensorRead = millis();
     currentHeight = readHeight();
+#ifndef NO_WIFI
     if (currentState != STATE_IDLE) publishMqttState(false);
+#endif
   }
 
   static unsigned long lastDebug = 0;
@@ -803,7 +834,9 @@ void loop() {
     Serial.print(F("H: "));
     Serial.print(currentHeight, 1);
     Serial.println(F(" cm"));
+#ifndef NO_WIFI
     publishMqttState(false);
+#endif
   }
 
   yield();
